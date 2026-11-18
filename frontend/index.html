@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCheck — Agent ID Daily Check-In &amp; Reputation Registry</title>
+<style>
+  :root {
+    --bg: #0b0e14; --card: #151a24; --line: #263042; --text: #e8ecf3;
+    --muted: #93a1b5; --accent: #f0b90b; --accent-text: #1a1405;
+    --ok: #3fb96f; --warn: #e0a23c; --err: #e05c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 20px 48px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h1 .dot { color: var(--accent); }
+  .tagline { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .stat .num { font-size: 30px; font-weight: 700; }
+  .stat .lbl { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+  button {
+    background: var(--accent); color: var(--accent-text); border: 0;
+    border-radius: 10px; padding: 12px 20px; font-size: 16px; font-weight: 600;
+    cursor: pointer; width: 100%;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .k { color: var(--muted); }
+  .addr { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+  .notice { border-radius: 10px; padding: 12px 14px; font-size: 14px; margin-bottom: 16px; }
+  .notice.warn { background: #2a2110; border: 1px solid var(--warn); color: #f3d9a4; }
+  .notice.err { background: #2a1212; border: 1px solid var(--err); color: #f3b8b8; }
+  .notice.ok { background: #10241a; border: 1px solid var(--ok); color: #b8e6cc; }
+  .hidden { display: none; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>AgentCheck<span class="dot">.</span></h1>
+  <p class="tagline">Daily check-in &amp; reputation registry for Agent ID holders on BNB Chain.
+  One check-in per day, streaks on-chain, readable by any dApp — proof of an active agent.</p>
+
+  <div id="prototypeNotice" class="notice warn hidden">
+    Prototype build: the AgentCheck contract is not deployed yet, so check-in is disabled.
+    The page structure, wallet flow and read calls are final; only the contract address is missing.
+  </div>
+  <div id="message" class="notice hidden"></div>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="statAgents">—</div><div class="lbl">Registered agents</div></div>
+    <div class="stat"><div class="num" id="statCheckIns">—</div><div class="lbl">Total check-ins</div></div>
+  </div>
+
+  <div style="height:16px"></div>
+
+  <div class="card" id="walletCard">
+    <div class="row"><span class="k">Wallet</span><span class="addr" id="walletAddr">Not connected</span></div>
+    <div class="row"><span class="k">Agent ID holder</span><span id="isAgent">—</span></div>
+    <div class="row"><span class="k">Your streak</span><span id="myStreak">—</span></div>
+    <div class="row"><span class="k">Your total check-ins</span><span id="myCheckIns">—</span></div>
+    <div class="row"><span class="k">Checked in today</span><span id="myToday">—</span></div>
+    <div style="height:14px"></div>
+    <button id="connectBtn">Connect wallet</button>
+    <div style="height:10px"></div>
+    <button id="checkInBtn" disabled>Check in for today</button>
+    <p style="color:var(--muted); font-size:13px; margin:12px 0 0">
+      Connect with any standard EVM wallet (browser extension or wallet app browser).
+      You always review and confirm the check-in transaction in your own wallet.
+    </p>
+  </div>
+
+  <div class="card">
+    <strong>How it works</strong>
+    <p style="color:var(--muted); margin:8px 0 0">
+      AgentCheck reads the Agent ID registry on BNB Chain: if your address holds an Agent ID,
+      you can check in once per UTC day. Consecutive days build your streak. The contract has
+      no owner and no admin functions, holds no funds, and never asks for token approvals —
+      other dApps can read your streak and check-in history straight from the chain.
+    </p>
+  </div>
+
+  <footer>
+    Check-ins are free except the BNB Chain network fee (gas) paid to the network.
+    AgentCheck is a reputation record only — it issues no token and promises no returns or rewards.
+    Contract: <span class="addr" id="contractAddr">not deployed yet</span>
+  </footer>
+</main>
+
+<script>
+"use strict";
+
+/* ================= configuration ================= */
+
+// TODO: fill in after deployment + BscScan verification (see README.md runbook).
+const AGENTCHECK_ADDRESS = "0x19c8fc3d4bf54139d5c6afb0d744fe614059ae84";
+
+const BSC_CHAIN_ID = 56;
+const BSC_CHAIN_ID_HEX = "0x38";
+const BSC_RPC = "https://bsc-dataseed.binance.org";
+const BSC_EXPLORER = "https://bscscan.com";
+
+// Function selectors of AgentCheckIn (computed with `cast sig`).
+const SEL = {
+  checkIn: "0x183ff085",           // checkIn()
+  totalAgents: "0xc5053712",       // totalAgents()
+  totalCheckIns: "0xa563eaa3",     // totalCheckIns()
+  isAgent: "0x1ffbb064",           // isAgent(address)
+  streakOf: "0x4fc1854a",          // streakOf(address)
+  checkInsOf: "0xda38a831",        // checkInsOf(address)
+  hasCheckedInToday: "0x3504f52b"  // hasCheckedInToday(address)
+};
+
+/* ================= tiny ABI helpers (no libraries) ================= */
+
+function encodeAddress(addr) {
+  return addr.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+}
+
+function decodeUint(hex) {
+  if (!hex || hex === "0x") return 0;
+  return Number(BigInt(hex));
+}
+
+function decodeBool(hex) {
+  return decodeUint(hex) !== 0;
+}
+
+/* ================= read-only RPC (public node) ================= */
+
+let rpcId = 0;
+async function rpcCall(method, params) {
+  const res = await fetch(BSC_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params })
+  });
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message || "RPC error");
+  return json.result;
+}
+
+async function ethCall(selector, addr) {
+  const data = addr ? selector + encodeAddress(addr) : selector;
+  return rpcCall("eth_call", [{ to: AGENTCHECK_ADDRESS, data }, "latest"]);
+}
+
+/* ================= UI state ================= */
+
+const $ = (id) => document.getElementById(id);
+let account = null;
+const deployed = AGENTCHECK_ADDRESS !== "0x0000000000000000000000000000000000000000";
+
+function showMessage(text, kind) {
+  const el = $("message");
+  el.textContent = text;
+  el.className = "notice " + (kind || "warn");
+}
+
+function clearMessage() {
+  $("message").className = "notice hidden";
+}
+
+/* ================= stats ================= */
+
+async function refreshStats() {
+  if (!deployed) return;
+  try {
+    const [agents, checkIns] = await Promise.all([
+      ethCall(SEL.totalAgents),
+      ethCall(SEL.totalCheckIns)
+    ]);
+    $("statAgents").textContent = decodeUint(agents).toLocaleString("en-US");
+    $("statCheckIns").textContent = decodeUint(checkIns).toLocaleString("en-US");
+  } catch (e) {
+    // Public RPC hiccup — leave the placeholders; a later refresh will retry.
+  }
+}
+
+async function refreshMine() {
+  if (!account || !deployed) return;
+  try {
+    const [agent, streak, mine, today] = await Promise.all([
+      ethCall(SEL.isAgent, account),
+      ethCall(SEL.streakOf, account),
+      ethCall(SEL.checkInsOf, account),
+      ethCall(SEL.hasCheckedInToday, account)
+    ]);
+    const isA = decodeBool(agent);
+    const done = decodeBool(today);
+    $("isAgent").textContent = isA ? "Yes" : "No";
+    $("myStreak").textContent = decodeUint(streak).toString();
+    $("myCheckIns").textContent = decodeUint(mine).toString();
+    $("myToday").textContent = done ? "Yes" : "Not yet";
+    const btn = $("checkInBtn");
+    btn.disabled = !isA || done;
+    btn.textContent = done
+      ? "Checked in — see you tomorrow"
+      : isA
+        ? "Check in for today"
+        : "Agent ID required to check in";
+  } catch (e) {
+    showMessage("Could not read your registry record: " + e.message, "err");
+  }
+}
+
+/* ================= wallet (standard EIP-1193) ================= */
+
+async function ensureBsc() {
+  const chainId = await window.ethereum.request({ method: "eth_chainId" });
+  if (chainId === BSC_CHAIN_ID_HEX) return;
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: BSC_CHAIN_ID_HEX }]
+    });
+  } catch (e) {
+    if (e.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: BSC_CHAIN_ID_HEX,
+          chainName: "BNB Smart Chain",
+          nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+          rpcUrls: [BSC_RPC],
+          blockExplorerUrls: [BSC_EXPLORER]
+        }]
+      });
+    } else {
+      throw e;
+    }
+  }
+}
+
+async function connect() {
+  clearMessage();
+  if (!window.ethereum) {
+    showMessage(
+      "No EVM wallet found. Open this page in a wallet app browser or install a wallet extension, then try again.",
+      "err"
+    );
+    return;
+  }
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    if (!accounts || accounts.length === 0) return;
+    account = accounts[0];
+    await ensureBsc();
+    $("walletAddr").textContent = account;
+    $("connectBtn").textContent = "Connected";
+    $("connectBtn").disabled = true;
+    await refreshMine();
+  } catch (e) {
+    showMessage("Connection failed: " + (e.message || e), "err");
+  }
+}
+
+async function checkIn() {
+  clearMessage();
+  if (!account || !window.ethereum) return;
+  const btn = $("checkInBtn");
+  btn.disabled = true;
+  btn.textContent = "Confirm in your wallet…";
+  try {
+    await ensureBsc();
+    const txHash = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from: account, to: AGENTCHECK_ADDRESS, data: SEL.checkIn }]
+    });
+    btn.textContent = "Waiting for confirmation…";
+    // Poll the public RPC for the receipt.
+    let receipt = null;
+    for (let i = 0; i < 30 && !receipt; i++) {
+      receipt = await rpcCall("eth_getTransactionReceipt", [txHash]);
+      if (!receipt) await new Promise((r) => setTimeout(r, 2000));
+    }
+    if (receipt && receipt.status === "0x1") {
+      showMessage("Checked in. Your streak is on-chain — come back tomorrow to extend it.", "ok");
+    } else if (receipt) {
+      showMessage("The check-in transaction reverted (already checked in today, or no Agent ID on this address).", "err");
+    } else {
+      showMessage("Transaction sent (" + txHash + ") — confirmation is taking a while; refresh in a moment.", "warn");
+    }
+  } catch (e) {
+    showMessage("Check-in failed: " + (e.message || e), "err");
+  } finally {
+    await refreshStats();
+    await refreshMine();
+  }
+}
+
+/* ================= boot ================= */
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (!deployed) {
+    $("prototypeNotice").classList.remove("hidden");
+    $("checkInBtn").textContent = "Check in (available after deployment)";
+  } else {
+    $("contractAddr").textContent = AGENTCHECK_ADDRESS;
+  }
+  $("connectBtn").addEventListener("click", connect);
+  $("checkInBtn").addEventListener("click", checkIn);
+  if (window.ethereum && window.ethereum.on) {
+    window.ethereum.on("accountsChanged", () => window.location.reload());
+    window.ethereum.on("chainChanged", () => window.location.reload());
+  }
+  refreshStats();
+});
+</script>
+</body>
+</html>
